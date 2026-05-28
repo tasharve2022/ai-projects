@@ -12,7 +12,7 @@ import time
 from datetime import datetime, timezone
 
 # ==================== CONFIGURATION ====================
-BOT_TOKEN = "8659342325:AAEaeCGi-apXb3KxHizaHpfJ5Sg-tXbiXOA"
+BOT_TOKEN = "8960194667:AAHN6_9Q5V29CYN6qxtDdih_2LlPOvlsjRo"
 DEEPSEEK_KEY = os.environ.get("API_KEY_DEEPSEEK", "sk-e4fb4154ebdf49c89dea3ead1f1706e5")
 DEEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions"
 DEEPSEEK_MODEL = "deepseek-v4-flash"
@@ -59,8 +59,43 @@ def update_conversation(chat_id, role, text, sender_name):
         convos[key]["messages"] = convos[key]["messages"][-MAX_HISTORY*2:]
     save_conversations(convos)
 
+# ==================== COMMAND DETECTION ====================
+def is_command_message(text):
+    """Detect if the message is a command/execution request that should be forwarded to Agent Zero VPS."""
+    command_keywords = [
+        "install", "uninstall", "update", "upgrade",
+        "run", "execute", "bash", "shell", "terminal",
+        "git clone", "git pull", "git push", "git add", "git commit",
+        "npm ", "pip ", "pip3 ", "npx ", "yarn ",
+        "apt-get", "apt ", "dpkg",
+        "curl", "wget", "mkdir", "rmdir", "rm -", "cp ", "mv ", "chmod", "chown",
+        "docker", "docker-compose", "nohup",
+        "make ", "cmake", "gcc", "g++", "python3 ", "python ",
+        "systemctl", "service ", "ufw", "iptables",
+        "ping", "traceroute", "netstat", "ss ",
+        "ls", "cat ", "cd ", "pwd", "echo ",
+        "start", "stop", "restart", "reload",
+        "deploy", "build", "compile", "test",
+        "scp", "ssh", "rsync",
+        "/start", "http://", "https://", "github.com",
+    ]
+    text_lower = text.lower().strip()
+    for kw in command_keywords:
+        if text_lower.startswith(kw):
+            if len(text_lower.split()) <= 20:
+                return True
+    if any(domain in text_lower for domain in ["github.com", "gitlab.com", "npmjs.com", "pypi.org"]) and any(verb in text_lower for verb in ["install", "setup", "deploy", "clone", "run", "add"]):
+        return True
+    return False
+
+def set_pending_flag():
+    """Signal Agent Zero that there are pending messages to process."""
+    pending_path = "/a0/usr/workdir/telegram_pending.json"
+    with open(pending_path, "w") as f:
+        json.dump({"has_new": True}, f)
+
 # ==================== DEEPSEEK AI REPLY ====================
-SYSTEM_PROMPT = """You are a helpful AI assistant named ZeroVPS running on the @MloshBot Telegram bot. 
+SYSTEM_PROMPT = """You are a helpful AI assistant named Agent0 running on the @MkhwaBot Telegram bot. 
 You are friendly, helpful, and concise. Respond naturally to the user's messages. 
 Keep responses informative but not overly long. Use a warm, conversational tone."""
 
@@ -187,7 +222,7 @@ def append_to_file(messages):
 def process_and_reply():
     """Main loop: poll, process, reply."""
     print("🚀 Telegram AI Auto-Reply Daemon started!")
-    print(f"🤖 Bot: @MloshBot (ZeroVPS)")
+    print(f"🤖 Bot: @MkhwaBot (Agent0)")
     print(f"🧠 AI: DeepSeek ({DEEPSEEK_MODEL})")
     print(f"⏱  Polling every 5 seconds...")
     sys.stdout.flush()
@@ -233,6 +268,26 @@ def process_and_reply():
                             formatted["sender"]
                         )
                         
+                        # Check if this is a command/execution message to defer to Agent Zero
+                        if is_command_message(formatted["text"]):
+                            # Set pending flag so Agent Zero picks it up
+                            set_pending_flag()
+                            # Reply telling user it's being forwarded
+                            cmd_reply = "⚡ Command received! Forwarding to VPS agent for execution... I'll handle this right away!"
+                            send_message(formatted["chat_id"], cmd_reply)
+                            # Update conversation history
+                            update_conversation(
+                                formatted["chat_id"],
+                                "assistant",
+                                cmd_reply,
+                                "Agent0"
+                            )
+                            print(f"✅ Deferred command to Agent Zero: {formatted['text'][:80]}")
+                            sys.stdout.flush()
+                            if update_id:
+                                save_offset(update_id + 1)
+                            continue  # Skip the normal AI reply generation
+
                         # Show typing indicator
                         send_typing(formatted["chat_id"])
                         time.sleep(1)  # Brief pause so user sees typing
